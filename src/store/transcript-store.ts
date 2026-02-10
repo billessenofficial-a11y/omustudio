@@ -25,9 +25,9 @@ const AI_MODEL = 'gemini-3-flash-preview';
 
 type AnalysisMode = 'fillers' | 'outtakes' | 'concise';
 
-const ANALYSIS_TIMEOUT_MS = 30_000;
-const ANALYSIS_RETRY_TIMEOUT_MS = 45_000;
+const ANALYSIS_TIMEOUT_MS = 60_000;
 let activeAnalysisController: AbortController | null = null;
+let userCancelledAnalysis = false;
 
 const ANALYSIS_PROMPTS: Record<AnalysisMode, string> = {
   fillers: `You are analyzing a video transcript to find FILLER WORDS -- words used as verbal crutches that add no meaning. This includes:
@@ -60,28 +60,43 @@ Return ONLY the numeric indices (0-based) of words to remove.`,
 };
 
 function cancelAnalysis() {
+  userCancelledAnalysis = true;
   if (activeAnalysisController) {
     activeAnalysisController.abort();
     activeAnalysisController = null;
   }
 }
 
-async function fetchAnalysis(
-  indexed: string,
+async function analyzeTranscriptWithAI(
+  words: TranscriptWord[],
   mode: AnalysisMode,
-  timeoutMs: number,
-  signal: AbortSignal,
-): Promise<number[]> {
+): Promise<Set<string>> {
+  if (!AI_API_KEY) throw new Error('Gemini API key not configured');
+
+  cancelAnalysis();
+  userCancelledAnalysis = false;
+
+  const controller = new AbortController();
+  activeAnalysisController = controller;
+
   const timeoutId = setTimeout(() => {
-    if (activeAnalysisController) activeAnalysisController.abort();
-  }, timeoutMs);
+    if (!userCancelledAnalysis && activeAnalysisController === controller) {
+      controller.abort();
+    }
+  }, ANALYSIS_TIMEOUT_MS);
+
+  const nonCrossed = words
+    .map((w, i) => ({ idx: i, id: w.id, text: w.text, crossed: w.isCrossed }))
+    .filter((w) => !w.crossed);
+
+  const indexed = nonCrossed.map((w) => `[${w.idx}] ${w.text}`).join(' ');
 
   try {
     const res = await fetch(
       `${AI_BASE_URL}/v1beta/models/${AI_MODEL}:generateContent?key=${AI_API_KEY}`,
       {
         method: 'POST',
-        signal,
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: ANALYSIS_PROMPTS[mode] }] },
@@ -89,17 +104,15 @@ async function fetchAnalysis(
             role: 'user',
             parts: [{ text: `Analyze this transcript and return a JSON array of numeric indices to remove.\n\nTranscript:\n${indexed}\n\nReturn ONLY a JSON array of numbers, e.g. [0, 3, 5, 6]. No markdown, no explanation.` }],
           }],
-          generationConfig: {
-            temperature: 0.1,
-            responseMimeType: 'application/json',
-          },
+          generationConfig: { temperature: 0.1 },
         }),
       },
     );
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: { message: 'Analysis failed' } }));
-      throw new Error(err.error?.message || 'Analysis request failed');
+      const errBody = await res.json().catch(() => null);
+      const errMsg = errBody?.error?.message || `API error ${res.status}`;
+      throw new Error(errMsg);
     }
 
     const data = await res.json();
@@ -121,60 +134,26 @@ async function fetchAnalysis(
     }
 
     if (!Array.isArray(indices)) throw new Error('AI response is not an array');
-    return indices;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
 
-async function analyzeTranscriptWithAI(
-  words: TranscriptWord[],
-  mode: AnalysisMode,
-): Promise<Set<string>> {
-  if (!AI_API_KEY) throw new Error('Gemini API key not configured');
-
-  cancelAnalysis();
-
-  const controller = new AbortController();
-  activeAnalysisController = controller;
-
-  const nonCrossed = words
-    .map((w, i) => ({ idx: i, id: w.id, text: w.text, crossed: w.isCrossed }))
-    .filter((w) => !w.crossed);
-
-  const indexed = nonCrossed.map((w) => `[${w.idx}] ${w.text}`).join(' ');
-
-  let indices: number[];
-  try {
-    indices = await fetchAnalysis(indexed, mode, ANALYSIS_TIMEOUT_MS, controller.signal);
-  } catch (firstErr) {
-    if (controller.signal.aborted) {
+    const idSet = new Set<string>();
+    for (const idx of indices) {
+      if (typeof idx === 'number' && idx >= 0 && idx < words.length) {
+        idSet.add(words[idx].id);
+      }
+    }
+    return idSet;
+  } catch (err) {
+    if (userCancelledAnalysis) {
       throw new Error('Analysis cancelled');
     }
-    console.warn(`[Transcript] First attempt failed (${mode}):`, firstErr);
-
-    const retryController = new AbortController();
-    activeAnalysisController = retryController;
-
-    try {
-      indices = await fetchAnalysis(indexed, mode, ANALYSIS_RETRY_TIMEOUT_MS, retryController.signal);
-    } catch (retryErr) {
-      if (retryController.signal.aborted) {
-        throw new Error('Analysis cancelled');
-      }
-      throw retryErr;
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Analysis timed out. Try with a shorter transcript.');
     }
+    throw err;
   } finally {
+    clearTimeout(timeoutId);
     activeAnalysisController = null;
   }
-
-  const idSet = new Set<string>();
-  for (const idx of indices) {
-    if (typeof idx === 'number' && idx >= 0 && idx < words.length) {
-      idSet.add(words[idx].id);
-    }
-  }
-  return idSet;
 }
 
 function computeSkipRegions(words: TranscriptWord[]): SkipRegion[] {
