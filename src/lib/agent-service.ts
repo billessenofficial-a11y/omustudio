@@ -725,9 +725,12 @@ export interface AgentResponse {
   actions: Array<{ name: string; result: string }>;
 }
 
+export type AgentProgressCallback = (toolNames: string[]) => void;
+
 export async function callAgent(
   history: GeminiMessage[],
   userText: string,
+  onProgress?: AgentProgressCallback,
 ): Promise<AgentResponse> {
   if (!API_KEY) throw new Error('Gemini API key not configured');
 
@@ -772,6 +775,11 @@ export async function callAgent(
     );
 
     if (functionCalls.length > 0) {
+      const toolNames = functionCalls.map(
+        (fc: { functionCall: { name: string } }) => fc.functionCall.name,
+      );
+      onProgress?.(toolNames);
+
       messages.push({ role: 'model', parts });
 
       const responseParts: GeminiMessage['parts'] = [];

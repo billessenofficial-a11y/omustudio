@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Sparkles, X, Send, Trash2, ChevronRight, Loader2, Bot, User, Mic, MicOff, Radio } from 'lucide-react';
-import { useChatStore, type ChatMessage, type ChatAction } from '../store/chat-store';
+import { useChatStore, getActionDisplayName, type ChatMessage, type ChatAction } from '../store/chat-store';
 import { useVoiceStore } from '../store/voice-store';
 
 const ACTION_LABELS: Record<string, string> = {
@@ -17,6 +17,12 @@ const ACTION_LABELS: Record<string, string> = {
   get_timeline_info: 'Checked Timeline',
   remove_silences: 'Removed Silences',
   add_all_media_to_timeline: 'Added Media to Timeline',
+  add_music: 'Added Music',
+  set_music_volume: 'Adjusted Volume',
+  add_transition: 'Added Transition',
+  add_transitions_all: 'Added Transitions',
+  set_transition_duration: 'Updated Transitions',
+  remove_transitions: 'Removed Transitions',
 };
 
 export default function AIChatPanel() {
@@ -46,7 +52,7 @@ function ChatButton({ onClick, isOpen }: { onClick: () => void; isOpen: boolean 
 }
 
 function ChatWindow() {
-  const { messages, isProcessing, sendMessage, clearMessages } = useChatStore();
+  const { messages, isProcessing, activeToolNames, sendMessage, clearMessages } = useChatStore();
   const { isVoiceActive, connectionState, sendTextDuringVoice } = useVoiceStore();
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -96,7 +102,7 @@ function ChatWindow() {
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
-        {isProcessing && <ThinkingIndicator />}
+        {isProcessing && <ThinkingIndicator activeToolNames={activeToolNames} />}
       </div>
 
       {isVoiceActive && <VoiceStatusBar />}
@@ -362,28 +368,43 @@ function ActionChip({ action }: { action: ChatAction }) {
   );
 }
 
-function ThinkingIndicator() {
+function ThinkingIndicator({ activeToolNames }: { activeToolNames: string[] }) {
+  const hasActions = activeToolNames.length > 0;
+  const actionLabel = hasActions
+    ? activeToolNames.map(getActionDisplayName).join(', ')
+    : null;
+
   return (
     <div className="flex gap-2">
       <div className="w-6 h-6 rounded-lg bg-editor-hover border border-editor-border flex items-center justify-center shrink-0">
         <Loader2 className="w-3 h-3 text-sky-400 animate-spin" />
       </div>
       <div className="bg-editor-hover border border-editor-border rounded-xl px-3 py-2">
-        <div className="flex items-center gap-1.5">
-          <div className="flex gap-1">
-            {[0, 1, 2].map((i) => (
-              <div
-                key={i}
-                className="w-1.5 h-1.5 rounded-full bg-sky-400/60"
-                style={{
-                  animation: 'chat-dot 1.4s ease-in-out infinite',
-                  animationDelay: `${i * 0.2}s`,
-                }}
-              />
-            ))}
+        {hasActions ? (
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-editor-text">On it!</span>
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="w-2.5 h-2.5 text-sky-400 shrink-0" />
+              <span className="text-[10px] text-sky-400 font-medium">{actionLabel}...</span>
+            </div>
           </div>
-          <span className="text-[10px] text-editor-text-dim ml-1">Thinking...</span>
-        </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <div className="flex gap-1">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="w-1.5 h-1.5 rounded-full bg-sky-400/60"
+                  style={{
+                    animation: 'chat-dot 1.4s ease-in-out infinite',
+                    animationDelay: `${i * 0.2}s`,
+                  }}
+                />
+              ))}
+            </div>
+            <span className="text-[10px] text-editor-text-dim ml-1">Thinking...</span>
+          </div>
+        )}
       </div>
     </div>
   );

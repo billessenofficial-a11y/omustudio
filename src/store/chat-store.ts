@@ -18,6 +18,7 @@ interface ChatState {
   messages: ChatMessage[];
   isOpen: boolean;
   isProcessing: boolean;
+  activeToolNames: string[];
   geminiHistory: GeminiMessage[];
 
   toggle: () => void;
@@ -28,12 +29,39 @@ interface ChatState {
   clearMessages: () => void;
 }
 
+const ACTION_DISPLAY: Record<string, string> = {
+  analyze_broll: 'Analyzing B-Roll',
+  add_captions: 'Adding captions',
+  set_caption_style: 'Changing caption style',
+  add_text: 'Adding text',
+  seek: 'Seeking',
+  playback: 'Controlling playback',
+  split_clip: 'Splitting clip',
+  delete_clip: 'Deleting clip',
+  set_project: 'Updating project',
+  open_export: 'Opening export',
+  get_timeline_info: 'Checking timeline',
+  remove_silences: 'Removing silences',
+  add_transition: 'Adding transition',
+  add_transitions_all: 'Adding transitions',
+  set_transition_duration: 'Updating transitions',
+  remove_transitions: 'Removing transitions',
+  add_all_media_to_timeline: 'Adding media',
+  add_music: 'Adding music',
+  set_music_volume: 'Adjusting volume',
+};
+
+export function getActionDisplayName(toolName: string): string {
+  return ACTION_DISPLAY[toolName] || toolName;
+}
+
 let msgCounter = 0;
 
 export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isOpen: false,
   isProcessing: false,
+  activeToolNames: [],
   geminiHistory: [],
 
   toggle: () => set((s) => ({ isOpen: !s.isOpen })),
@@ -54,11 +82,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       messages: [...s.messages, userMsg],
       isProcessing: true,
+      activeToolNames: [],
     }));
 
     try {
       const history = get().geminiHistory;
-      const response: AgentResponse = await callAgent(history, trimmed);
+
+      const onProgress = (toolNames: string[]) => {
+        set({ activeToolNames: toolNames });
+      };
+
+      const response: AgentResponse = await callAgent(history, trimmed, onProgress);
 
       const assistantMsg: ChatMessage = {
         id: `msg-${++msgCounter}`,
@@ -82,6 +116,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set((s) => ({
         messages: [...s.messages, assistantMsg],
         isProcessing: false,
+        activeToolNames: [],
         geminiHistory: trimmedHistory,
       }));
     } catch (err) {
@@ -95,6 +130,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set((s) => ({
         messages: [...s.messages, errorMsg],
         isProcessing: false,
+        activeToolNames: [],
       }));
     }
   },
