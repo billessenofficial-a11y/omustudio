@@ -11,14 +11,17 @@ import {
   FileText,
   Scissors,
   Loader2,
+  LogOut,
 } from 'lucide-react';
 import { useProjectStore } from '../store/project-store';
 import { useUIStore } from '../store/ui-store';
+import { useAuthStore } from '../store/auth-store';
 import { removeSilences } from '../lib/silence-remover';
 
 export default function TopBar() {
   const { project, setProject } = useProjectStore();
-  const { setShowExportModal, toggleBRollPanel, showBRollPanel, toggleCaptionsPanel, showCaptionsPanel, toggleTranscriptPanel, showTranscriptPanel } = useUIStore();
+  const { setShowExportModal, toggleBRollPanel, showBRollPanel, toggleCaptionsPanel, showCaptionsPanel, toggleTranscriptPanel, showTranscriptPanel, setAppView } = useUIStore();
+  const { signOut } = useAuthStore();
   const [editing, setEditing] = useState(false);
   const [nameValue, setNameValue] = useState(project.name);
   const [removingSilences, setRemovingSilences] = useState(false);
@@ -51,6 +54,11 @@ export default function TopBar() {
     if (trimmed) setProject({ name: trimmed });
     else setNameValue(project.name);
     setEditing(false);
+  };
+
+  const handleLogout = async () => {
+    await signOut();
+    setAppView('landing');
   };
 
   return (
@@ -171,6 +179,13 @@ export default function TopBar() {
 
         <button className="btn-icon" title="Settings">
           <Settings className="w-4 h-4" />
+        </button>
+        <button
+          onClick={handleLogout}
+          className="btn-icon"
+          title="Logout"
+        >
+          <LogOut className="w-4 h-4" />
         </button>
         <button
           onClick={() => setShowExportModal(true)}
