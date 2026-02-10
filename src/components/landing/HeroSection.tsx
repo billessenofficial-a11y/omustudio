@@ -92,20 +92,19 @@ export default function HeroSection() {
       <div className="relative z-10 max-w-6xl mx-auto px-6 text-center pt-24">
         <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-white/10 bg-white/[0.03] backdrop-blur-sm mb-8 animate-landing-fade-up">
           <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="text-xs font-medium text-white/60">Talk to your editor</span>
+          <span className="text-xs font-medium text-white/60">The future of video editing</span>
         </div>
 
         <h1 className="text-5xl sm:text-6xl lg:text-[5.5rem] font-bold tracking-tight text-white leading-[1.05] mb-6 animate-landing-fade-up animation-delay-100">
-          Your voice is the
+          Edit videos at the
           <br />
           <span className="bg-gradient-to-r from-cyan-400 via-teal-300 to-emerald-400 bg-clip-text text-transparent">
-            editing tool
+            speed of thought
           </span>
         </h1>
 
         <p className="text-lg sm:text-xl text-white/40 max-w-2xl mx-auto mb-14 leading-relaxed animate-landing-fade-up animation-delay-200">
-          Just say what you want. Omu listens, understands, and edits your
-          video in real time. Captions, silence removal, B-roll, music -- all by voice.
+          Forget clicking through endless menus. Just speak your edits and watch them happen. Remove silences, add captions, insert B-roll -- what used to take hours now takes seconds.
         </p>
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-20 animate-landing-fade-up animation-delay-300">
