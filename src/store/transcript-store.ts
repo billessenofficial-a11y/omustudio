@@ -157,10 +157,21 @@ async function analyzeTranscriptWithAI(
 }
 
 function computeSkipRegions(words: TranscriptWord[]): SkipRegion[] {
-  const crossed = words
-    .filter((w) => w.isCrossed)
-    .map((w) => ({ start: w.startTime, end: w.endTime }));
-  return mergeRegions(crossed);
+  const regions: SkipRegion[] = [];
+  let i = 0;
+  while (i < words.length) {
+    if (words[i].isCrossed) {
+      const start = words[i].startTime;
+      let end = words[i].endTime;
+      while (i + 1 < words.length && words[i + 1].isCrossed) {
+        i++;
+        end = words[i].endTime;
+      }
+      regions.push({ start, end });
+    }
+    i++;
+  }
+  return mergeRegions(regions);
 }
 
 interface TranscriptState {
