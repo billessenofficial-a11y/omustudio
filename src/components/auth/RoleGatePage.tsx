@@ -55,8 +55,8 @@ export default function RoleGatePage() {
                 icon={<Trophy className="w-6 h-6 text-amber-400" />}
                 iconBg="bg-amber-500/10"
                 title="Hackathon Reviewer"
-                description="Full access to the editor. Sign up and start editing videos right away."
-                buttonLabel="Sign Up"
+                description="Full access to the editor. Enter your access password to start editing videos."
+                buttonLabel="Continue"
                 onClick={() => setAppView('auth')}
               />
               <RoleCard

@@ -1,11 +1,9 @@
-import { useState } from 'react';
 import { Film, ArrowLeft } from 'lucide-react';
 import { useUIStore } from '../../store/ui-store';
 import AuthForm from './AuthForm';
 
 export default function AuthPage() {
   const setAppView = useUIStore((s) => s.setAppView);
-  const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login');
 
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col">
@@ -41,78 +39,19 @@ export default function AuthPage() {
           </div>
 
           <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-md p-8 shadow-2xl shadow-black/20">
-            {mode === 'reset' ? (
-              <ResetHeader />
-            ) : (
-              <AuthHeader mode={mode} />
-            )}
+            <div className="mb-8">
+              <h1 className="text-2xl font-bold tracking-tight mb-2">
+                Hackathon Review Access
+              </h1>
+              <p className="text-sm text-white/40 leading-relaxed">
+                Enter the password to access the editor.
+              </p>
+            </div>
 
-            <AuthForm mode={mode} setMode={setMode} />
+            <AuthForm mode="login" setMode={() => {}} />
           </div>
-
-          <AuthFooter mode={mode} setMode={setMode} />
         </div>
       </div>
     </div>
-  );
-}
-
-function AuthHeader({ mode }: { mode: 'login' | 'signup' }) {
-  return (
-    <div className="mb-8">
-      <h1 className="text-2xl font-bold tracking-tight mb-2">
-        {mode === 'login' ? 'Welcome back' : 'Create your account'}
-      </h1>
-      <p className="text-sm text-white/40 leading-relaxed">
-        {mode === 'login'
-          ? 'Sign in to continue editing your videos.'
-          : 'Start editing videos with the power of AI.'}
-      </p>
-    </div>
-  );
-}
-
-function ResetHeader() {
-  return (
-    <div className="mb-8">
-      <h1 className="text-2xl font-bold tracking-tight mb-2">Reset password</h1>
-      <p className="text-sm text-white/40 leading-relaxed">
-        Enter your email and we'll send you a reset link.
-      </p>
-    </div>
-  );
-}
-
-function AuthFooter({
-  mode,
-  setMode,
-}: {
-  mode: 'login' | 'signup' | 'reset';
-  setMode: (m: 'login' | 'signup' | 'reset') => void;
-}) {
-  if (mode === 'reset') {
-    return (
-      <p className="text-center mt-6 text-sm text-white/30">
-        Remember your password?{' '}
-        <button
-          onClick={() => setMode('login')}
-          className="text-cyan-400 hover:text-cyan-300 font-medium transition-colors"
-        >
-          Sign in
-        </button>
-      </p>
-    );
-  }
-
-  return (
-    <p className="text-center mt-6 text-sm text-white/30">
-      {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
-      <button
-        onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
-        className="text-cyan-400 hover:text-cyan-300 font-medium transition-colors"
-      >
-        {mode === 'login' ? 'Sign up' : 'Sign in'}
-      </button>
-    </p>
   );
 }
