@@ -4,6 +4,8 @@ import { transcribeWithScribe } from '../lib/elevenlabs-service';
 import { useProjectStore } from './project-store';
 import { useTimelineStore } from './timeline-store';
 import { useUIStore } from './ui-store';
+import { removeSilences } from '../lib/silence-remover';
+import type { TimelineTrack } from '../types/editor';
 import { buildCompactedClips, invertToSpeech, mapTimeToCompacted, mergeRegions } from '../lib/timeline-utils';
 
 export interface TranscriptWord {
@@ -21,7 +23,7 @@ export interface SkipRegion {
 
 const AI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const AI_BASE_URL = 'https://generativelanguage.googleapis.com';
-const AI_MODEL = 'gemini-2.5-flash-lite';
+const AI_MODEL = 'gemini-2.5-flash';
 
 type AnalysisMode = 'fillers' | 'outtakes' | 'concise';
 
@@ -181,6 +183,8 @@ interface TranscriptState {
   error: string | null;
   skipRegions: SkipRegion[];
   hasApplied: boolean;
+  _originalWords: TranscriptWord[] | null;
+  _preApplyTracks: TimelineTrack[] | null;
 
   isAnalyzing: boolean;
   analysisLabel: string;
@@ -191,6 +195,7 @@ interface TranscriptState {
   crossOutFillerWords: () => Promise<number>;
   crossOutOuttakes: () => Promise<number>;
   makeConcise: () => Promise<number>;
+  removeSilencesAction: () => Promise<void>;
   cancelAnalysis: () => void;
   uncrossAll: () => void;
   applyToTimeline: () => void;
@@ -205,6 +210,8 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
   error: null,
   skipRegions: [],
   hasApplied: false,
+  _originalWords: null,
+  _preApplyTracks: null,
   isAnalyzing: false,
   analysisLabel: '',
 
@@ -279,29 +286,21 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
   },
 
   toggleWord: (wordId) => {
-    const { words, hasApplied } = get();
+    const { words } = get();
     const updated = words.map((w) =>
       w.id === wordId ? { ...w, isCrossed: !w.isCrossed } : w
     );
-    if (hasApplied) {
-      set({ words: updated });
-    } else {
-      set({ words: updated, skipRegions: computeSkipRegions(updated) });
-    }
+    set({ words: updated, skipRegions: computeSkipRegions(updated) });
   },
 
   crossOutRange: (startIdx, endIdx) => {
-    const { words, hasApplied } = get();
+    const { words } = get();
     const lo = Math.min(startIdx, endIdx);
     const hi = Math.max(startIdx, endIdx);
     const updated = words.map((w, i) =>
       i >= lo && i <= hi ? { ...w, isCrossed: true } : w
     );
-    if (hasApplied) {
-      set({ words: updated });
-    } else {
-      set({ words: updated, skipRegions: computeSkipRegions(updated) });
-    }
+    set({ words: updated, skipRegions: computeSkipRegions(updated) });
     const count = hi - lo + 1;
     useUIStore.getState().addToast(`Crossed out ${count} word${count !== 1 ? 's' : ''}`, 'success');
   },
@@ -372,19 +371,46 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
     }
   },
 
+  removeSilencesAction: async () => {
+    set({ isAnalyzing: true, analysisLabel: 'Removing silences...' });
+    try {
+      await removeSilences();
+      set({
+        words: [],
+        skipRegions: [],
+        hasApplied: false,
+        _originalWords: null,
+        _preApplyTracks: null,
+        isAnalyzing: false,
+        analysisLabel: '',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      set({ isAnalyzing: false, analysisLabel: '' });
+      useUIStore.getState().addToast(`Silence removal failed: ${msg}`, 'error');
+    }
+  },
+
   cancelAnalysis: () => {
     cancelAnalysis();
     set({ isAnalyzing: false, analysisLabel: '' });
   },
 
   uncrossAll: () => {
-    const { words } = get();
-    const updated = words.map((w) => (w.isCrossed ? { ...w, isCrossed: false } : w));
-    set({ words: updated, skipRegions: [], hasApplied: false });
+    const { _originalWords, _preApplyTracks, words } = get();
+    if (_preApplyTracks) {
+      const timeline = useTimelineStore.getState();
+      timeline.pushUndo();
+      useTimelineStore.setState({ tracks: _preApplyTracks });
+      useTimelineStore.getState().recalcDuration();
+    }
+    const base = _originalWords || words;
+    const updated = base.map((w) => ({ ...w, isCrossed: false }));
+    set({ words: updated, skipRegions: [], hasApplied: false, _originalWords: null, _preApplyTracks: null });
   },
 
   applyToTimeline: () => {
-    const { words, skipRegions } = get();
+    const { words, skipRegions, _originalWords, _preApplyTracks } = get();
     if (words.length === 0 || skipRegions.length === 0) return;
 
     const timeline = useTimelineStore.getState();
@@ -395,6 +421,9 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
       .filter((c) => c.mediaId)
       .sort((a, b) => a.startTime - b.startTime);
     if (videoClips.length === 0) return;
+
+    const originalWords = _originalWords || [...words];
+    const preApplyTracks = _preApplyTracks || timeline.tracks;
 
     const trackStart = Math.min(...videoClips.map((c) => c.startTime));
     const trackEnd = Math.max(...videoClips.map((c) => c.startTime + c.duration));
@@ -427,7 +456,7 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
       };
     });
 
-    set({ words: retimed, skipRegions: [], hasApplied: true });
+    set({ words: retimed, skipRegions: [], hasApplied: true, _originalWords: originalWords, _preApplyTracks: preApplyTracks });
 
     useUIStore.getState().addToast(
       `Removed ${crossedCount} word${crossedCount !== 1 ? 's' : ''}, saved ${totalSaved.toFixed(1)}s`,
@@ -444,6 +473,8 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
       error: null,
       skipRegions: [],
       hasApplied: false,
+      _originalWords: null,
+      _preApplyTracks: null,
       isAnalyzing: false,
       analysisLabel: '',
     });

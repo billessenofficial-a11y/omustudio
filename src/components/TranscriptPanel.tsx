@@ -16,6 +16,7 @@ import {
   ChevronDown,
   Clapperboard,
   XCircle,
+  VolumeX,
 } from 'lucide-react';
 import { useTranscriptStore, type TranscriptWord } from '../store/transcript-store';
 import { useTimelineStore } from '../store/timeline-store';
@@ -72,6 +73,7 @@ export default function TranscriptPanel() {
     crossOutFillerWords,
     crossOutOuttakes,
     makeConcise,
+    removeSilencesAction,
     cancelAnalysis,
     uncrossAll,
     applyToTimeline,
@@ -136,6 +138,7 @@ export default function TranscriptPanel() {
               onRemoveFillers={crossOutFillerWords}
               onRemoveOuttakes={crossOutOuttakes}
               onMakeConcise={makeConcise}
+              onRemoveSilences={removeSilencesAction}
               onCancelAnalysis={cancelAnalysis}
               onUncrossAll={uncrossAll}
               onRetranscribe={transcribe}
@@ -170,6 +173,7 @@ function TranscriptToolbar({
   onRemoveFillers,
   onRemoveOuttakes,
   onMakeConcise,
+  onRemoveSilences,
   onCancelAnalysis,
   onUncrossAll,
   onRetranscribe,
@@ -182,6 +186,7 @@ function TranscriptToolbar({
   onRemoveFillers: () => void;
   onRemoveOuttakes: () => void;
   onMakeConcise: () => void;
+  onRemoveSilences: () => void;
   onCancelAnalysis: () => void;
   onUncrossAll: () => void;
   onRetranscribe: () => void;
@@ -259,6 +264,16 @@ function TranscriptToolbar({
                 <div>
                   <div className="font-medium">Make Concise</div>
                   <div className="text-editor-text-dim mt-0.5">Tighten delivery, cut redundancy</div>
+                </div>
+              </button>
+              <button
+                onClick={() => handleAction(onRemoveSilences)}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-editor-text hover:bg-editor-hover transition-colors text-left border-t border-editor-border/50"
+              >
+                <VolumeX className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                <div>
+                  <div className="font-medium">Remove Silences</div>
+                  <div className="text-editor-text-dim mt-0.5">Cut dead air and long pauses</div>
                 </div>
               </button>
             </div>
