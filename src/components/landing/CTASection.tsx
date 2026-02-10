@@ -21,7 +21,7 @@ export default function CTASection() {
         </p>
 
         <button
-          onClick={() => setAppView('editor')}
+          onClick={() => setAppView('auth')}
           className="relative group inline-flex items-center gap-3 px-10 py-4 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-400 text-white font-medium text-lg shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/30 hover:scale-[1.02] transition-all duration-200"
         >
           Launch Omu

@@ -11,7 +11,9 @@ import CaptionsPanel from './components/CaptionsPanel';
 import TranscriptPanel from './components/TranscriptPanel';
 import AIChatPanel from './components/AIChatPanel';
 import LandingPage from './components/landing/LandingPage';
+import AuthPage from './components/auth/AuthPage';
 import { useUIStore } from './store/ui-store';
+import { useAuthStore } from './store/auth-store';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { getFFmpeg } from './lib/ffmpeg';
 
@@ -89,9 +91,45 @@ function Editor() {
 
 export default function App() {
   const appView = useUIStore((s) => s.appView);
+  const setAppView = useUIStore((s) => s.setAppView);
+  const { user, loading, initialized, initialize } = useAuthStore();
+
+  useEffect(() => {
+    initialize();
+  }, [initialize]);
+
+  useEffect(() => {
+    if (!initialized) return;
+    if (appView === 'editor' && !user) {
+      setAppView('auth');
+    }
+  }, [appView, user, initialized, setAppView]);
+
+  if (!initialized || loading) {
+    return (
+      <div className="h-screen w-screen bg-[#0A0A0A] flex items-center justify-center">
+        <div className="flex items-center gap-3">
+          <div className="w-4 h-4 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin" />
+          <span className="text-sm text-white/40">Loading...</span>
+        </div>
+      </div>
+    );
+  }
 
   if (appView === 'landing') {
     return <LandingPage />;
+  }
+
+  if (appView === 'auth') {
+    if (user) {
+      setAppView('editor');
+      return null;
+    }
+    return <AuthPage />;
+  }
+
+  if (!user) {
+    return <AuthPage />;
   }
 
   return <Editor />;

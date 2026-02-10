@@ -43,7 +43,7 @@ export default function LandingHeader() {
         </nav>
 
         <button
-          onClick={() => setAppView('editor')}
+          onClick={() => setAppView('auth')}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white text-[#0A0A0A] text-sm font-medium hover:bg-white/90 transition-all"
         >
           Open Editor

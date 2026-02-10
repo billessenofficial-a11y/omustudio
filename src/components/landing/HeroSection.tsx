@@ -109,7 +109,7 @@ export default function HeroSection() {
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-20 animate-landing-fade-up animation-delay-300">
           <button
-            onClick={() => setAppView('editor')}
+            onClick={() => setAppView('auth')}
             className="group relative flex items-center gap-3 px-8 py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-400 text-white font-medium text-base shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/30 hover:scale-[1.02] transition-all duration-200"
           >
             Start Editing Free

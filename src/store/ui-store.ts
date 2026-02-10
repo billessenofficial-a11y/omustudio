@@ -6,7 +6,7 @@ interface Toast {
   type: 'info' | 'success' | 'warning' | 'error';
 }
 
-type AppView = 'landing' | 'editor';
+type AppView = 'landing' | 'auth' | 'editor';
 
 interface UIState {
   appView: AppView;
