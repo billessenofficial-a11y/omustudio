@@ -96,10 +96,10 @@ export default function HeroSection() {
         </div>
 
         <h1 className="text-5xl sm:text-6xl lg:text-[5.5rem] font-bold tracking-tight text-white leading-[1.05] mb-6 animate-landing-fade-up animation-delay-100">
-          Edit videos as fast
+          Edit your videos
           <br />
           <span className="bg-gradient-to-r from-cyan-400 via-teal-300 to-emerald-400 bg-clip-text text-transparent">
-            as you can speak
+            Hands-free
           </span>
         </h1>
 
