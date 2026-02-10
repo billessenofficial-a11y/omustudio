@@ -35,6 +35,7 @@ export class LiveVoiceService {
   private playbackQueue: PlaybackItem[] = [];
   private isPlayingAudio = false;
   private nextPlayTime = 0;
+  private lastModelAudioTime = 0;
 
   constructor(callbacks: LiveVoiceCallbacks) {
     this.callbacks = callbacks;
@@ -166,6 +167,11 @@ export class LiveVoiceService {
   }
 
   private async handleToolCalls(calls: FunctionCall[]): Promise<void> {
+    const timeSinceAudio = Date.now() - this.lastModelAudioTime;
+    if (timeSinceAudio > 1500) {
+      this.playAcknowledgmentCue();
+    }
+
     const responses = [];
 
     for (const call of calls) {
@@ -181,6 +187,38 @@ export class LiveVoiceService {
 
     if (this.session && responses.length > 0) {
       this.session.sendToolResponse({ functionResponses: responses });
+    }
+  }
+
+  private playAcknowledgmentCue(): void {
+    try {
+      if (!this.outputAudioContext) {
+        this.outputAudioContext = new AudioContext({ sampleRate: 24000 });
+      }
+
+      const ctx = this.outputAudioContext;
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+
+      const duration = 0.15;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + duration);
+
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + duration);
+    } catch (_) {
+      /* ignore audio cue failures */
     }
   }
 
@@ -237,6 +275,8 @@ export class LiveVoiceService {
   }
 
   private async enqueueAudio(base64Data: string, mimeType: string): Promise<void> {
+    this.lastModelAudioTime = Date.now();
+
     if (!this.outputAudioContext) {
       this.outputAudioContext = new AudioContext({ sampleRate: 24000 });
     }
