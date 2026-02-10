@@ -154,7 +154,7 @@ function ChatHeader({
           <Sparkles className="w-3.5 h-3.5 text-sky-400" />
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-editor-text">Framecraft AI</span>
+          <span className="text-sm font-semibold text-editor-text">Omu AI</span>
           {isVoiceActive ? (
             <span className="flex items-center gap-1.5">
               <span className="relative flex h-2 w-2">
