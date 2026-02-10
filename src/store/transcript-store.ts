@@ -25,6 +25,10 @@ const AI_MODEL = 'gemini-3-flash-preview';
 
 type AnalysisMode = 'fillers' | 'outtakes' | 'concise';
 
+const ANALYSIS_TIMEOUT_MS = 30_000;
+const ANALYSIS_RETRY_TIMEOUT_MS = 45_000;
+let activeAnalysisController: AbortController | null = null;
+
 const ANALYSIS_PROMPTS: Record<AnalysisMode, string> = {
   fillers: `You are analyzing a video transcript to find FILLER WORDS -- words used as verbal crutches that add no meaning. This includes:
 - Hesitation sounds: um, uh, hmm, ah, er, mhm
@@ -55,11 +59,84 @@ CRITICAL: Do NOT remove words that would break grammar or change meaning. Only r
 Return ONLY the numeric indices (0-based) of words to remove.`,
 };
 
+function cancelAnalysis() {
+  if (activeAnalysisController) {
+    activeAnalysisController.abort();
+    activeAnalysisController = null;
+  }
+}
+
+async function fetchAnalysis(
+  indexed: string,
+  mode: AnalysisMode,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<number[]> {
+  const timeoutId = setTimeout(() => {
+    if (activeAnalysisController) activeAnalysisController.abort();
+  }, timeoutMs);
+
+  try {
+    const res = await fetch(
+      `${AI_BASE_URL}/v1beta/models/${AI_MODEL}:generateContent?key=${AI_API_KEY}`,
+      {
+        method: 'POST',
+        signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: ANALYSIS_PROMPTS[mode] }] },
+          contents: [{
+            role: 'user',
+            parts: [{ text: `Analyze this transcript and return a JSON array of numeric indices to remove.\n\nTranscript:\n${indexed}\n\nReturn ONLY a JSON array of numbers, e.g. [0, 3, 5, 6]. No markdown, no explanation.` }],
+          }],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
+        }),
+      },
+    );
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: { message: 'Analysis failed' } }));
+      throw new Error(err.error?.message || 'Analysis request failed');
+    }
+
+    const data = await res.json();
+
+    if (data.candidates?.[0]?.finishReason === 'SAFETY') {
+      throw new Error('Response blocked by safety filter');
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    if (!text) throw new Error('Empty response from AI');
+
+    const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+    let indices: number[];
+    try {
+      indices = JSON.parse(cleaned);
+    } catch {
+      throw new Error('Failed to parse AI response');
+    }
+
+    if (!Array.isArray(indices)) throw new Error('AI response is not an array');
+    return indices;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function analyzeTranscriptWithAI(
   words: TranscriptWord[],
   mode: AnalysisMode,
 ): Promise<Set<string>> {
   if (!AI_API_KEY) throw new Error('Gemini API key not configured');
+
+  cancelAnalysis();
+
+  const controller = new AbortController();
+  activeAnalysisController = controller;
 
   const nonCrossed = words
     .map((w, i) => ({ idx: i, id: w.id, text: w.text, crossed: w.isCrossed }))
@@ -67,39 +144,29 @@ async function analyzeTranscriptWithAI(
 
   const indexed = nonCrossed.map((w) => `[${w.idx}] ${w.text}`).join(' ');
 
-  const res = await fetch(
-    `${AI_BASE_URL}/v1beta/models/${AI_MODEL}:generateContent?key=${AI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: ANALYSIS_PROMPTS[mode] }] },
-        contents: [{
-          role: 'user',
-          parts: [{ text: `Analyze this transcript and return a JSON array of numeric indices to remove.\n\nTranscript:\n${indexed}\n\nReturn ONLY a JSON array of numbers, e.g. [0, 3, 5, 6]. No markdown, no explanation.` }],
-        }],
-        generationConfig: { temperature: 0.1 },
-      }),
-    },
-  );
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: { message: 'Analysis failed' } }));
-    throw new Error(err.error?.message || 'Analysis request failed');
-  }
-
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
   let indices: number[];
   try {
-    indices = JSON.parse(cleaned);
-  } catch {
-    throw new Error('Failed to parse AI response');
-  }
+    indices = await fetchAnalysis(indexed, mode, ANALYSIS_TIMEOUT_MS, controller.signal);
+  } catch (firstErr) {
+    if (controller.signal.aborted) {
+      throw new Error('Analysis cancelled');
+    }
+    console.warn(`[Transcript] First attempt failed (${mode}):`, firstErr);
 
-  if (!Array.isArray(indices)) throw new Error('AI response is not an array');
+    const retryController = new AbortController();
+    activeAnalysisController = retryController;
+
+    try {
+      indices = await fetchAnalysis(indexed, mode, ANALYSIS_RETRY_TIMEOUT_MS, retryController.signal);
+    } catch (retryErr) {
+      if (retryController.signal.aborted) {
+        throw new Error('Analysis cancelled');
+      }
+      throw retryErr;
+    }
+  } finally {
+    activeAnalysisController = null;
+  }
 
   const idSet = new Set<string>();
   for (const idx of indices) {
@@ -126,6 +193,7 @@ interface TranscriptState {
   hasApplied: boolean;
 
   isAnalyzing: boolean;
+  analysisLabel: string;
 
   transcribe: () => Promise<void>;
   toggleWord: (wordId: string) => void;
@@ -133,6 +201,7 @@ interface TranscriptState {
   crossOutFillerWords: () => Promise<number>;
   crossOutOuttakes: () => Promise<number>;
   makeConcise: () => Promise<number>;
+  cancelAnalysis: () => void;
   uncrossAll: () => void;
   applyToTimeline: () => void;
   clear: () => void;
@@ -147,6 +216,7 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
   skipRegions: [],
   hasApplied: false,
   isAnalyzing: false,
+  analysisLabel: '',
 
   transcribe: async () => {
     const { addToast } = useUIStore.getState();
@@ -251,18 +321,19 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
     const { addToast } = useUIStore.getState();
     if (words.length === 0) { addToast('No transcript to analyze', 'warning'); return 0; }
 
-    set({ isAnalyzing: true });
+    set({ isAnalyzing: true, analysisLabel: 'Finding filler words...' });
     try {
       const ids = await analyzeTranscriptWithAI(words, 'fillers');
-      if (ids.size === 0) { addToast('No filler words found', 'info'); set({ isAnalyzing: false }); return 0; }
+      if (ids.size === 0) { addToast('No filler words found', 'info'); set({ isAnalyzing: false, analysisLabel: '' }); return 0; }
 
       const updated = get().words.map((w) => ids.has(w.id) ? { ...w, isCrossed: true } : w);
-      set({ words: updated, skipRegions: computeSkipRegions(updated), hasApplied: false, isAnalyzing: false });
+      set({ words: updated, skipRegions: computeSkipRegions(updated), hasApplied: false, isAnalyzing: false, analysisLabel: '' });
       addToast(`Crossed out ${ids.size} filler word${ids.size !== 1 ? 's' : ''}`, 'success');
       return ids.size;
     } catch (err) {
-      set({ isAnalyzing: false });
-      addToast(`Filler analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      set({ isAnalyzing: false, analysisLabel: '' });
+      if (msg !== 'Analysis cancelled') addToast(`Filler analysis failed: ${msg}`, 'error');
       return 0;
     }
   },
@@ -272,18 +343,19 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
     const { addToast } = useUIStore.getState();
     if (words.length === 0) { addToast('No transcript to analyze', 'warning'); return 0; }
 
-    set({ isAnalyzing: true });
+    set({ isAnalyzing: true, analysisLabel: 'Detecting outtakes...' });
     try {
       const ids = await analyzeTranscriptWithAI(words, 'outtakes');
-      if (ids.size === 0) { addToast('No outtakes found', 'info'); set({ isAnalyzing: false }); return 0; }
+      if (ids.size === 0) { addToast('No outtakes found', 'info'); set({ isAnalyzing: false, analysisLabel: '' }); return 0; }
 
       const updated = get().words.map((w) => ids.has(w.id) ? { ...w, isCrossed: true } : w);
-      set({ words: updated, skipRegions: computeSkipRegions(updated), hasApplied: false, isAnalyzing: false });
+      set({ words: updated, skipRegions: computeSkipRegions(updated), hasApplied: false, isAnalyzing: false, analysisLabel: '' });
       addToast(`Crossed out ${ids.size} words from outtakes`, 'success');
       return ids.size;
     } catch (err) {
-      set({ isAnalyzing: false });
-      addToast(`Outtake analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      set({ isAnalyzing: false, analysisLabel: '' });
+      if (msg !== 'Analysis cancelled') addToast(`Outtake analysis failed: ${msg}`, 'error');
       return 0;
     }
   },
@@ -293,20 +365,26 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
     const { addToast } = useUIStore.getState();
     if (words.length === 0) { addToast('No transcript to analyze', 'warning'); return 0; }
 
-    set({ isAnalyzing: true });
+    set({ isAnalyzing: true, analysisLabel: 'Making it concise...' });
     try {
       const ids = await analyzeTranscriptWithAI(words, 'concise');
-      if (ids.size === 0) { addToast('Transcript is already concise', 'info'); set({ isAnalyzing: false }); return 0; }
+      if (ids.size === 0) { addToast('Transcript is already concise', 'info'); set({ isAnalyzing: false, analysisLabel: '' }); return 0; }
 
       const updated = get().words.map((w) => ids.has(w.id) ? { ...w, isCrossed: true } : w);
-      set({ words: updated, skipRegions: computeSkipRegions(updated), hasApplied: false, isAnalyzing: false });
+      set({ words: updated, skipRegions: computeSkipRegions(updated), hasApplied: false, isAnalyzing: false, analysisLabel: '' });
       addToast(`Crossed out ${ids.size} words to make it concise`, 'success');
       return ids.size;
     } catch (err) {
-      set({ isAnalyzing: false });
-      addToast(`Concise analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      set({ isAnalyzing: false, analysisLabel: '' });
+      if (msg !== 'Analysis cancelled') addToast(`Concise analysis failed: ${msg}`, 'error');
       return 0;
     }
+  },
+
+  cancelAnalysis: () => {
+    cancelAnalysis();
+    set({ isAnalyzing: false, analysisLabel: '' });
   },
 
   uncrossAll: () => {
@@ -368,6 +446,7 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
   },
 
   clear: () => {
+    cancelAnalysis();
     set({
       words: [],
       isTranscribing: false,
@@ -376,6 +455,7 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
       skipRegions: [],
       hasApplied: false,
       isAnalyzing: false,
+      analysisLabel: '',
     });
   },
 

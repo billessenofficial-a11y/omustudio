@@ -15,6 +15,7 @@ import {
   Minimize2,
   ChevronDown,
   Clapperboard,
+  XCircle,
 } from 'lucide-react';
 import { useTranscriptStore, type TranscriptWord } from '../store/transcript-store';
 import { useTimelineStore } from '../store/timeline-store';
@@ -64,12 +65,14 @@ export default function TranscriptPanel() {
     skipRegions,
     hasApplied,
     isAnalyzing,
+    analysisLabel,
     transcribe,
     toggleWord,
     crossOutRange,
     crossOutFillerWords,
     crossOutOuttakes,
     makeConcise,
+    cancelAnalysis,
     uncrossAll,
     applyToTimeline,
     clear,
@@ -129,9 +132,11 @@ export default function TranscriptPanel() {
               crossedCount={crossedCount}
               totalSaved={totalSaved}
               isAnalyzing={isAnalyzing}
+              analysisLabel={analysisLabel}
               onRemoveFillers={crossOutFillerWords}
               onRemoveOuttakes={crossOutOuttakes}
               onMakeConcise={makeConcise}
+              onCancelAnalysis={cancelAnalysis}
               onUncrossAll={uncrossAll}
               onRetranscribe={transcribe}
             />
@@ -161,9 +166,11 @@ function TranscriptToolbar({
   crossedCount,
   totalSaved,
   isAnalyzing,
+  analysisLabel,
   onRemoveFillers,
   onRemoveOuttakes,
   onMakeConcise,
+  onCancelAnalysis,
   onUncrossAll,
   onRetranscribe,
 }: {
@@ -171,9 +178,11 @@ function TranscriptToolbar({
   crossedCount: number;
   totalSaved: number;
   isAnalyzing: boolean;
+  analysisLabel: string;
   onRemoveFillers: () => void;
   onRemoveOuttakes: () => void;
   onMakeConcise: () => void;
+  onCancelAnalysis: () => void;
   onUncrossAll: () => void;
   onRetranscribe: () => void;
 }) {
@@ -200,24 +209,26 @@ function TranscriptToolbar({
     <div className="px-4 py-3 border-b border-editor-border space-y-3 shrink-0">
       <div className="flex items-center gap-2">
         <div className="relative flex-1" ref={menuRef}>
-          <button
-            onClick={() => !isAnalyzing && setShowMenu((p) => !p)}
-            disabled={isAnalyzing}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-teal-500/15 hover:bg-teal-500/25 text-teal-400 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-          >
-            {isAnalyzing ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Analyzing...
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-3.5 h-3.5" />
-                AI Clean Up
-                <ChevronDown className="w-3 h-3 ml-0.5" />
-              </>
-            )}
-          </button>
+          {isAnalyzing ? (
+            <button
+              onClick={onCancelAnalysis}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-amber-500/15 hover:bg-red-500/20 text-amber-400 hover:text-red-400 rounded-lg text-xs font-medium transition-colors group"
+            >
+              <Loader2 className="w-3.5 h-3.5 animate-spin group-hover:hidden" />
+              <XCircle className="w-3.5 h-3.5 hidden group-hover:block" />
+              <span className="group-hover:hidden">{analysisLabel || 'Analyzing...'}</span>
+              <span className="hidden group-hover:inline">Cancel</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowMenu((p) => !p)}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-teal-500/15 hover:bg-teal-500/25 text-teal-400 rounded-lg text-xs font-medium transition-colors"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              AI Clean Up
+              <ChevronDown className="w-3 h-3 ml-0.5" />
+            </button>
+          )}
           {showMenu && (
             <div className="absolute top-full left-0 right-0 mt-1 bg-editor-panel border border-editor-border rounded-lg shadow-xl z-50 overflow-hidden">
               <button
