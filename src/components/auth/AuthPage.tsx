@@ -23,7 +23,7 @@ export default function AuthPage() {
 
       <header className="relative z-10 px-6 h-16 flex items-center">
         <button
-          onClick={() => setAppView('landing')}
+          onClick={() => setAppView('role-gate')}
           className="flex items-center gap-2 text-sm text-white/40 hover:text-white/70 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />

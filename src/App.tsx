@@ -12,6 +12,7 @@ import TranscriptPanel from './components/TranscriptPanel';
 import AIChatPanel from './components/AIChatPanel';
 import LandingPage from './components/landing/LandingPage';
 import AuthPage from './components/auth/AuthPage';
+import RoleGatePage from './components/auth/RoleGatePage';
 import { useUIStore } from './store/ui-store';
 import { useAuthStore } from './store/auth-store';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -101,7 +102,7 @@ export default function App() {
   useEffect(() => {
     if (!initialized) return;
     if (appView === 'editor' && !user) {
-      setAppView('auth');
+      setAppView('role-gate');
     }
   }, [appView, user, initialized, setAppView]);
 
@@ -118,6 +119,14 @@ export default function App() {
 
   if (appView === 'landing') {
     return <LandingPage />;
+  }
+
+  if (appView === 'role-gate') {
+    if (user) {
+      setAppView('editor');
+      return null;
+    }
+    return <RoleGatePage />;
   }
 
   if (appView === 'auth') {
