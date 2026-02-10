@@ -21,7 +21,7 @@ export interface SkipRegion {
 
 const AI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const AI_BASE_URL = 'https://generativelanguage.googleapis.com';
-const AI_MODEL = 'gemini-3-flash-preview';
+const AI_MODEL = 'gemini-2.5-flash-lite';
 
 type AnalysisMode = 'fillers' | 'outtakes' | 'concise';
 
