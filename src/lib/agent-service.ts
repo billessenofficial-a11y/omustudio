@@ -4,6 +4,7 @@ import { useCaptionStore, type CaptionStyle } from '../store/caption-store';
 import { useBRollStore } from '../store/broll-store';
 import { useUIStore } from '../store/ui-store';
 import { useMusicStore, MUSIC_LIBRARY } from '../store/music-store';
+import { useTranscriptStore } from '../store/transcript-store';
 import { removeSilences } from './silence-remover';
 import type { TextAnimation, TransitionType } from '../types/editor';
 
@@ -19,9 +20,12 @@ Be concise, friendly, and action-oriented. When you perform actions, briefly con
 
 CRITICAL VOICE BEHAVIOR: When you are going to call a tool/function, you MUST ALWAYS speak a brief acknowledgment to the user BEFORE making the function call. For example, say something like "Sure, let me do that!" or "On it, adding that now!" or "Alright, working on it!" FIRST, then call the tool. NEVER call a tool silently without speaking to the user first. The user needs to hear that you understood their request before you start working on it. This is extremely important for a good voice experience.
 
+IMPORTANT -- CAPTIONS vs TRANSCRIPT EDITOR (these are DIFFERENT features):
+- CAPTIONS (add_captions, set_caption_style): Add styled TEXT OVERLAYS displayed on screen during playback. Styles: karaoke, pop, fade, typewriter, word-by-word, slide. This is for visual subtitles.
+- TRANSCRIPT EDITOR (open_transcript, remove_fillers, remove_outtakes, make_concise, apply_transcript_edits): Edit the ACTUAL VIDEO CONTENT by removing words/sections from the timeline. When the user says "transcript", "edit transcript", "remove fillers", "clean up", "remove outtakes", "make it shorter/concise", they mean THIS feature -- NOT captions.
+
 Important notes:
-- The user must have a video on the main track before B-Roll analysis or caption transcription will work.
-- Caption styles: karaoke (words highlight in sync), pop (bouncy entrance), fade (gentle fade in), typewriter (letter by letter), word-by-word (one word at a time), slide (slides up).
+- The user must have a video on the main track before B-Roll analysis, captioning, or transcript editing will work.
 - B-Roll analysis uses AI to suggest overlay footage moments, then the user can generate the actual footage.
 - When adding text, if no startTime is given, use the current playhead position.
 - Always check the editor state before suggesting actions to avoid errors.
@@ -258,6 +262,31 @@ export const TOOL_DECLARATIONS = [
       required: ['volume'],
     },
   },
+  {
+    name: 'open_transcript',
+    description: 'Open the Transcript Editor panel and start transcribing the video if not already done. This lets the user edit the actual video content by removing words and sections. NOT the same as captions.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'remove_fillers',
+    description: 'Use AI to analyze the transcript and cross out filler words (um, uh, like, you know, etc.) based on context. Opens transcript panel if needed. Requires transcription first.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'remove_outtakes',
+    description: 'Use AI to analyze the transcript and cross out outtakes -- false starts, repeated phrases, stumbles, and self-corrections. Opens transcript panel if needed.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'make_concise',
+    description: 'Use AI to analyze the transcript and cross out redundant/verbose sections to make the video shorter and tighter without losing the core message.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'apply_transcript_edits',
+    description: 'Apply the currently crossed-out words from the Transcript Editor to the timeline, permanently removing those sections from the video.',
+    parameters: { type: 'object', properties: {} },
+  },
 ];
 
 export function buildEditorContext(): string {
@@ -300,7 +329,8 @@ Media library (${mediaFiles.length} file(s)):
 ${mediaSummary}
 Transitions: ${transitions.length > 0 ? transitions.map((t) => `  ${t.type} (${t.duration}s) id=${t.id} from=${t.fromClipId} to=${t.toClipId}`).join('\n') : 'none'}
 Captions: ${segments.length} words transcribed, ${clipIds.length} caption clips applied, style: ${captionStyle}
-B-Roll: ${suggestions.length} suggestions`;
+B-Roll: ${suggestions.length} suggestions
+Transcript Editor: ${(() => { const ts = useTranscriptStore.getState(); const wc = ts.words.length; if (wc === 0) return 'not transcribed'; const cc = ts.words.filter((w: { isCrossed: boolean }) => w.isCrossed).length; return `${wc} words, ${cc} crossed out, ${ts.hasApplied ? 'edits applied' : 'edits pending'}`; })()}`;
 }
 
 export async function executeAction(
@@ -702,6 +732,69 @@ export async function executeAction(
         }
 
         return { result: `Set volume to ${(volume * 100).toFixed(0)}% on ${updated} audio clip(s).` };
+      }
+
+      case 'open_transcript': {
+        const ui = useUIStore.getState();
+        if (!ui.showTranscriptPanel) ui.toggleTranscriptPanel();
+        const ts = useTranscriptStore.getState();
+        if (ts.words.length === 0 && !ts.isTranscribing) {
+          await ts.transcribe();
+          const count = useTranscriptStore.getState().words.length;
+          return { result: count > 0 ? `Opened transcript editor and transcribed ${count} words. The user can now cross out words to remove or use AI clean-up tools.` : 'Opened transcript editor but no speech was detected.' };
+        }
+        return { result: `Transcript editor is open with ${ts.words.length} words transcribed.` };
+      }
+
+      case 'remove_fillers': {
+        const ui = useUIStore.getState();
+        if (!ui.showTranscriptPanel) ui.toggleTranscriptPanel();
+        const ts = useTranscriptStore.getState();
+        if (ts.words.length === 0 && !ts.isTranscribing) {
+          await ts.transcribe();
+        }
+        if (useTranscriptStore.getState().words.length === 0) {
+          return { result: 'No speech detected in the video to analyze for fillers.' };
+        }
+        const count = await useTranscriptStore.getState().crossOutFillerWords();
+        return { result: count > 0 ? `AI found and crossed out ${count} filler word(s). The user can review them in the transcript panel and click "Apply Edits" when ready.` : 'No filler words found in the transcript.' };
+      }
+
+      case 'remove_outtakes': {
+        const ui = useUIStore.getState();
+        if (!ui.showTranscriptPanel) ui.toggleTranscriptPanel();
+        const ts = useTranscriptStore.getState();
+        if (ts.words.length === 0 && !ts.isTranscribing) {
+          await ts.transcribe();
+        }
+        if (useTranscriptStore.getState().words.length === 0) {
+          return { result: 'No speech detected in the video to analyze for outtakes.' };
+        }
+        const count = await useTranscriptStore.getState().crossOutOuttakes();
+        return { result: count > 0 ? `AI found and crossed out ${count} word(s) from outtakes/false starts. The user can review in the transcript panel and click "Apply Edits".` : 'No outtakes found in the transcript.' };
+      }
+
+      case 'make_concise': {
+        const ui = useUIStore.getState();
+        if (!ui.showTranscriptPanel) ui.toggleTranscriptPanel();
+        const ts = useTranscriptStore.getState();
+        if (ts.words.length === 0 && !ts.isTranscribing) {
+          await ts.transcribe();
+        }
+        if (useTranscriptStore.getState().words.length === 0) {
+          return { result: 'No speech detected in the video.' };
+        }
+        const count = await useTranscriptStore.getState().makeConcise();
+        return { result: count > 0 ? `AI identified ${count} word(s) to remove for a more concise version. The user can review in the transcript panel and click "Apply Edits".` : 'The transcript is already concise.' };
+      }
+
+      case 'apply_transcript_edits': {
+        const ts = useTranscriptStore.getState();
+        if (ts.words.length === 0) return { result: 'No transcript to apply. Open the transcript editor first.' };
+        const crossedCount = ts.words.filter((w) => w.isCrossed).length;
+        if (crossedCount === 0) return { result: 'No words are crossed out. Cross out words first using remove_fillers, remove_outtakes, make_concise, or manually in the transcript panel.' };
+        ts.applyToTimeline();
+        return { result: `Applied transcript edits: removed ${crossedCount} word(s) from the timeline.` };
       }
 
       default:

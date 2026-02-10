@@ -85,3 +85,16 @@ export function buildCompactedClips(
 
   return newClips;
 }
+
+export function mapTimeToCompacted(time: number, skipRegions: Region[]): number {
+  let removed = 0;
+  for (const r of skipRegions) {
+    if (time <= r.start) break;
+    if (time >= r.end) {
+      removed += r.end - r.start;
+    } else {
+      removed += time - r.start;
+    }
+  }
+  return time - removed;
+}

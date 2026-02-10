@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   X,
   FileText,
@@ -11,6 +11,10 @@ import {
   Eraser,
   Scissors,
   Undo2,
+  Loader2,
+  Minimize2,
+  ChevronDown,
+  Clapperboard,
 } from 'lucide-react';
 import { useTranscriptStore, type TranscriptWord } from '../store/transcript-store';
 import { useTimelineStore } from '../store/timeline-store';
@@ -22,6 +26,7 @@ const PARAGRAPH_PAUSE = 0.5;
 interface WordParagraph {
   timestamp: number;
   words: TranscriptWord[];
+  globalStartIdx: number;
 }
 
 function groupIntoParagraphs(words: TranscriptWord[]): WordParagraph[] {
@@ -29,19 +34,21 @@ function groupIntoParagraphs(words: TranscriptWord[]): WordParagraph[] {
 
   const paragraphs: WordParagraph[] = [];
   let current: TranscriptWord[] = [words[0]];
+  let startIdx = 0;
 
   for (let i = 1; i < words.length; i++) {
     const gap = words[i].startTime - words[i - 1].endTime;
     if (gap > PARAGRAPH_PAUSE) {
-      paragraphs.push({ timestamp: current[0].startTime, words: current });
+      paragraphs.push({ timestamp: current[0].startTime, words: current, globalStartIdx: startIdx });
       current = [words[i]];
+      startIdx = i;
     } else {
       current.push(words[i]);
     }
   }
 
   if (current.length > 0) {
-    paragraphs.push({ timestamp: current[0].startTime, words: current });
+    paragraphs.push({ timestamp: current[0].startTime, words: current, globalStartIdx: startIdx });
   }
 
   return paragraphs;
@@ -56,9 +63,13 @@ export default function TranscriptPanel() {
     error,
     skipRegions,
     hasApplied,
+    isAnalyzing,
     transcribe,
     toggleWord,
+    crossOutRange,
     crossOutFillerWords,
+    crossOutOuttakes,
+    makeConcise,
     uncrossAll,
     applyToTimeline,
     clear,
@@ -117,11 +128,18 @@ export default function TranscriptPanel() {
               wordCount={words.length}
               crossedCount={crossedCount}
               totalSaved={totalSaved}
+              isAnalyzing={isAnalyzing}
               onRemoveFillers={crossOutFillerWords}
+              onRemoveOuttakes={crossOutOuttakes}
+              onMakeConcise={makeConcise}
               onUncrossAll={uncrossAll}
               onRetranscribe={transcribe}
             />
-            <TranscriptDocument words={words} onToggleWord={toggleWord} />
+            <TranscriptDocument
+              words={words}
+              onToggleWord={toggleWord}
+              onCrossOutRange={crossOutRange}
+            />
             <TranscriptFooter
               crossedCount={crossedCount}
               hasApplied={hasApplied}
@@ -142,27 +160,99 @@ function TranscriptToolbar({
   wordCount,
   crossedCount,
   totalSaved,
+  isAnalyzing,
   onRemoveFillers,
+  onRemoveOuttakes,
+  onMakeConcise,
   onUncrossAll,
   onRetranscribe,
 }: {
   wordCount: number;
   crossedCount: number;
   totalSaved: number;
+  isAnalyzing: boolean;
   onRemoveFillers: () => void;
+  onRemoveOuttakes: () => void;
+  onMakeConcise: () => void;
   onUncrossAll: () => void;
   onRetranscribe: () => void;
 }) {
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showMenu]);
+
+  const handleAction = (fn: () => void) => {
+    setShowMenu(false);
+    fn();
+  };
+
   return (
     <div className="px-4 py-3 border-b border-editor-border space-y-3 shrink-0">
       <div className="flex items-center gap-2">
-        <button
-          onClick={onRemoveFillers}
-          className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-teal-500/15 hover:bg-teal-500/25 text-teal-400 rounded-lg text-xs font-medium transition-colors"
-        >
-          <Eraser className="w-3.5 h-3.5" />
-          Remove Filler Words
-        </button>
+        <div className="relative flex-1" ref={menuRef}>
+          <button
+            onClick={() => !isAnalyzing && setShowMenu((p) => !p)}
+            disabled={isAnalyzing}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-teal-500/15 hover:bg-teal-500/25 text-teal-400 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+          >
+            {isAnalyzing ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Analyzing...
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-3.5 h-3.5" />
+                AI Clean Up
+                <ChevronDown className="w-3 h-3 ml-0.5" />
+              </>
+            )}
+          </button>
+          {showMenu && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-editor-panel border border-editor-border rounded-lg shadow-xl z-50 overflow-hidden">
+              <button
+                onClick={() => handleAction(onRemoveFillers)}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-editor-text hover:bg-editor-hover transition-colors text-left"
+              >
+                <Eraser className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                <div>
+                  <div className="font-medium">Remove Filler Words</div>
+                  <div className="text-editor-text-dim mt-0.5">um, uh, like, you know...</div>
+                </div>
+              </button>
+              <button
+                onClick={() => handleAction(onRemoveOuttakes)}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-editor-text hover:bg-editor-hover transition-colors text-left border-t border-editor-border/50"
+              >
+                <Clapperboard className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <div>
+                  <div className="font-medium">Remove Outtakes</div>
+                  <div className="text-editor-text-dim mt-0.5">False starts, repeated phrases</div>
+                </div>
+              </button>
+              <button
+                onClick={() => handleAction(onMakeConcise)}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-xs text-editor-text hover:bg-editor-hover transition-colors text-left border-t border-editor-border/50"
+              >
+                <Minimize2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <div>
+                  <div className="font-medium">Make Concise</div>
+                  <div className="text-editor-text-dim mt-0.5">Tighten delivery, cut redundancy</div>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
         {crossedCount > 0 && (
           <button
             onClick={onUncrossAll}
@@ -195,19 +285,84 @@ function TranscriptToolbar({
 function TranscriptDocument({
   words,
   onToggleWord,
+  onCrossOutRange,
 }: {
   words: TranscriptWord[];
   onToggleWord: (id: string) => void;
+  onCrossOutRange: (startIdx: number, endIdx: number) => void;
 }) {
   const paragraphs = useMemo(() => groupIntoParagraphs(words), [words]);
+  const [dragAnchor, setDragAnchor] = useState<number | null>(null);
+  const [dragEnd, setDragEnd] = useState<number | null>(null);
+  const isDragging = useRef(false);
+  const [lastClickIdx, setLastClickIdx] = useState<number | null>(null);
+
+  const selectionRange = useMemo(() => {
+    if (dragAnchor === null || dragEnd === null) return null;
+    return { lo: Math.min(dragAnchor, dragEnd), hi: Math.max(dragAnchor, dragEnd) };
+  }, [dragAnchor, dragEnd]);
+
+  const handleWordMouseDown = useCallback((globalIdx: number, e: React.MouseEvent) => {
+    if (e.shiftKey) return;
+    isDragging.current = true;
+    setDragAnchor(globalIdx);
+    setDragEnd(globalIdx);
+  }, []);
+
+  const handleWordMouseEnter = useCallback((globalIdx: number) => {
+    if (isDragging.current) {
+      setDragEnd(globalIdx);
+    }
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    if (isDragging.current && dragAnchor !== null && dragEnd !== null) {
+      const lo = Math.min(dragAnchor, dragEnd);
+      const hi = Math.max(dragAnchor, dragEnd);
+      if (hi - lo >= 1) {
+        onCrossOutRange(lo, hi);
+      }
+    }
+    isDragging.current = false;
+    setDragAnchor(null);
+    setDragEnd(null);
+  }, [dragAnchor, dragEnd, onCrossOutRange]);
+
+  const handleWordClick = useCallback((globalIdx: number, wordId: string, e: React.MouseEvent) => {
+    if (e.shiftKey && lastClickIdx !== null) {
+      onCrossOutRange(Math.min(lastClickIdx, globalIdx), Math.max(lastClickIdx, globalIdx));
+      setLastClickIdx(null);
+      return;
+    }
+    setLastClickIdx(globalIdx);
+    onToggleWord(wordId);
+  }, [lastClickIdx, onCrossOutRange, onToggleWord]);
+
+  useEffect(() => {
+    const handler = () => {
+      if (isDragging.current) {
+        isDragging.current = false;
+        setDragAnchor(null);
+        setDragEnd(null);
+      }
+    };
+    document.addEventListener('mouseup', handler);
+    return () => document.removeEventListener('mouseup', handler);
+  }, []);
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+    <div
+      className="flex-1 overflow-y-auto px-4 py-3 space-y-4 select-none"
+      onMouseUp={handleMouseUp}
+    >
       {paragraphs.map((para, pi) => (
         <ParagraphBlock
           key={`${para.timestamp}-${pi}`}
           paragraph={para}
-          onToggleWord={onToggleWord}
+          selectionRange={selectionRange}
+          onWordMouseDown={handleWordMouseDown}
+          onWordMouseEnter={handleWordMouseEnter}
+          onWordClick={handleWordClick}
         />
       ))}
     </div>
@@ -216,33 +371,45 @@ function TranscriptDocument({
 
 function ParagraphBlock({
   paragraph,
-  onToggleWord,
+  selectionRange,
+  onWordMouseDown,
+  onWordMouseEnter,
+  onWordClick,
 }: {
   paragraph: WordParagraph;
-  onToggleWord: (id: string) => void;
+  selectionRange: { lo: number; hi: number } | null;
+  onWordMouseDown: (idx: number, e: React.MouseEvent) => void;
+  onWordMouseEnter: (idx: number) => void;
+  onWordClick: (idx: number, wordId: string, e: React.MouseEvent) => void;
 }) {
   const currentTime = useTimelineStore((s) => s.currentTime);
   const { setCurrentTime, setIsPlaying } = useTimelineStore();
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div ref={scrollContainerRef}>
+    <div>
       <span className="text-[10px] font-mono text-editor-text-dim block mb-1.5 select-none">
         {formatTimeShort(paragraph.timestamp)}
       </span>
       <div className="leading-relaxed">
-        {paragraph.words.map((word) => (
-          <WordSpan
-            key={word.id}
-            word={word}
-            currentTime={currentTime}
-            onToggle={() => onToggleWord(word.id)}
-            onSeek={() => {
-              setCurrentTime(word.startTime);
-              setIsPlaying(false);
-            }}
-          />
-        ))}
+        {paragraph.words.map((word, localIdx) => {
+          const globalIdx = paragraph.globalStartIdx + localIdx;
+          return (
+            <WordSpan
+              key={word.id}
+              word={word}
+              globalIdx={globalIdx}
+              currentTime={currentTime}
+              isInSelection={selectionRange !== null && globalIdx >= selectionRange.lo && globalIdx <= selectionRange.hi}
+              onMouseDown={(e) => onWordMouseDown(globalIdx, e)}
+              onMouseEnter={() => onWordMouseEnter(globalIdx)}
+              onClick={(e) => onWordClick(globalIdx, word.id, e)}
+              onSeek={() => {
+                setCurrentTime(word.startTime);
+                setIsPlaying(false);
+              }}
+            />
+          );
+        })}
       </div>
     </div>
   );
@@ -250,13 +417,21 @@ function ParagraphBlock({
 
 function WordSpan({
   word,
+  globalIdx: _globalIdx,
   currentTime,
-  onToggle,
+  isInSelection,
+  onMouseDown,
+  onMouseEnter,
+  onClick,
   onSeek,
 }: {
   word: TranscriptWord;
+  globalIdx: number;
   currentTime: number;
-  onToggle: () => void;
+  isInSelection: boolean;
+  onMouseDown: (e: React.MouseEvent) => void;
+  onMouseEnter: () => void;
+  onClick: (e: React.MouseEvent) => void;
   onSeek: () => void;
 }) {
   const isActive = currentTime >= word.startTime && currentTime < word.endTime;
@@ -270,34 +445,33 @@ function WordSpan({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      if (e.shiftKey) {
+      if (e.detail === 2) {
         onSeek();
-      } else {
-        onToggle();
+        return;
       }
+      onClick(e);
     },
-    [onToggle, onSeek],
+    [onClick, onSeek],
   );
-
-  const handleDoubleClick = useCallback(() => {
-    onSeek();
-  }, [onSeek]);
 
   return (
     <span
       ref={ref}
+      onMouseDown={onMouseDown}
+      onMouseEnter={onMouseEnter}
       onClick={handleClick}
-      onDoubleClick={handleDoubleClick}
       className={`
         inline cursor-pointer select-none rounded-sm px-0.5 py-px text-[13px] transition-all duration-150
         ${word.isCrossed
           ? 'line-through opacity-40 text-red-400/70 hover:opacity-60'
-          : isActive
-            ? 'bg-teal-500/30 text-teal-200'
-            : 'text-editor-text hover:bg-editor-hover/60'
+          : isInSelection
+            ? 'bg-red-500/30 text-red-200'
+            : isActive
+              ? 'bg-teal-500/30 text-teal-200'
+              : 'text-editor-text hover:bg-editor-hover/60'
         }
       `}
-      title={word.isCrossed ? 'Click to restore' : 'Click to cross out, Shift+click to seek'}
+      title={word.isCrossed ? 'Click to restore' : 'Click to cross out -- Shift+click to select range -- Double-click to seek'}
     >
       {word.text}{' '}
     </span>

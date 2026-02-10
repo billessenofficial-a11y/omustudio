@@ -4,7 +4,7 @@ import { transcribeWithScribe } from '../lib/elevenlabs-service';
 import { useProjectStore } from './project-store';
 import { useTimelineStore } from './timeline-store';
 import { useUIStore } from './ui-store';
-import { buildCompactedClips, invertToSpeech, mergeRegions } from '../lib/timeline-utils';
+import { buildCompactedClips, invertToSpeech, mapTimeToCompacted, mergeRegions } from '../lib/timeline-utils';
 
 export interface TranscriptWord {
   id: string;
@@ -19,20 +19,96 @@ export interface SkipRegion {
   end: number;
 }
 
-const FILLER_WORDS = new Set([
-  'um', 'uh', 'uh-huh', 'hmm', 'ah', 'er', 'eh',
-  'like', 'so', 'well', 'right', 'basically', 'actually',
-  'literally', 'honestly', 'anyway', 'whatever', 'okay',
-  'mhm', 'hm', 'mm', 'mmm', 'uhm',
-]);
+const AI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+const AI_BASE_URL = 'https://generativelanguage.googleapis.com';
+const AI_MODEL = 'gemini-3-flash-preview';
 
-const FILLER_PHRASES: [string, string][] = [
-  ['you', 'know'],
-  ['i', 'mean'],
-  ['sort', 'of'],
-  ['kind', 'of'],
-  ['i', 'guess'],
-];
+type AnalysisMode = 'fillers' | 'outtakes' | 'concise';
+
+const ANALYSIS_PROMPTS: Record<AnalysisMode, string> = {
+  fillers: `You are analyzing a video transcript to find FILLER WORDS -- words used as verbal crutches that add no meaning. This includes:
+- Hesitation sounds: um, uh, hmm, ah, er, mhm
+- Discourse markers used as fillers (NOT when used meaningfully): like, so, well, right, basically, actually, literally, honestly, anyway, okay
+- Filler phrases: "you know", "I mean", "sort of", "kind of", "I guess" (only when used as fillers)
+
+CRITICAL: You must analyze CONTEXT. "like" in "I like this" is NOT a filler. "like" in "it was, like, really good" IS a filler. "so" starting a new thought as a conjunction is NOT a filler. "so" as a pause word IS a filler. "right" as agreement/confirmation IS a filler. "right" as in "the right way" is NOT.
+
+Return ONLY the numeric indices (0-based) of words that are genuine fillers based on their context.`,
+
+  outtakes: `You are analyzing a video transcript to find OUTTAKES -- sections where the speaker made mistakes and restarted. This includes:
+- False starts where the speaker began a sentence then restarted it (e.g., "I was going to-- I decided to go")
+- Repeated phrases where the speaker said the same thing twice (the first attempt should be removed)
+- Stumbles and incomplete thoughts that were immediately corrected
+- Self-corrections where the speaker said something wrong then fixed it (remove the wrong part)
+
+Return ONLY the numeric indices (0-based) of words that are part of outtakes/false starts that should be removed. Keep the final/corrected version, remove the initial failed attempts.`,
+
+  concise: `You are analyzing a video transcript to make it MORE CONCISE without losing the core message. Identify words/phrases that can be removed to tighten the delivery. This includes:
+- Redundant repetitions where the speaker makes the same point twice (keep the better version)
+- Unnecessary qualifiers and hedging ("just", "really", "very", "quite", "a little bit")
+- Verbose phrases that could be shorter (remove filler sentences, not individual words from key sentences)
+- Tangential asides that don't serve the main message
+- Over-explanations where the point was already made clearly
+
+CRITICAL: Do NOT remove words that would break grammar or change meaning. Only remove complete phrases or words that are truly unnecessary. Preserve the speaker's voice and key points.
+
+Return ONLY the numeric indices (0-based) of words to remove.`,
+};
+
+async function analyzeTranscriptWithAI(
+  words: TranscriptWord[],
+  mode: AnalysisMode,
+): Promise<Set<string>> {
+  if (!AI_API_KEY) throw new Error('Gemini API key not configured');
+
+  const nonCrossed = words
+    .map((w, i) => ({ idx: i, id: w.id, text: w.text, crossed: w.isCrossed }))
+    .filter((w) => !w.crossed);
+
+  const indexed = nonCrossed.map((w) => `[${w.idx}] ${w.text}`).join(' ');
+
+  const res = await fetch(
+    `${AI_BASE_URL}/v1beta/models/${AI_MODEL}:generateContent?key=${AI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: ANALYSIS_PROMPTS[mode] }] },
+        contents: [{
+          role: 'user',
+          parts: [{ text: `Analyze this transcript and return a JSON array of numeric indices to remove.\n\nTranscript:\n${indexed}\n\nReturn ONLY a JSON array of numbers, e.g. [0, 3, 5, 6]. No markdown, no explanation.` }],
+        }],
+        generationConfig: { temperature: 0.1 },
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: { message: 'Analysis failed' } }));
+    throw new Error(err.error?.message || 'Analysis request failed');
+  }
+
+  const data = await res.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+  let indices: number[];
+  try {
+    indices = JSON.parse(cleaned);
+  } catch {
+    throw new Error('Failed to parse AI response');
+  }
+
+  if (!Array.isArray(indices)) throw new Error('AI response is not an array');
+
+  const idSet = new Set<string>();
+  for (const idx of indices) {
+    if (typeof idx === 'number' && idx >= 0 && idx < words.length) {
+      idSet.add(words[idx].id);
+    }
+  }
+  return idSet;
+}
 
 function computeSkipRegions(words: TranscriptWord[]): SkipRegion[] {
   const crossed = words
@@ -49,9 +125,14 @@ interface TranscriptState {
   skipRegions: SkipRegion[];
   hasApplied: boolean;
 
+  isAnalyzing: boolean;
+
   transcribe: () => Promise<void>;
   toggleWord: (wordId: string) => void;
-  crossOutFillerWords: () => number;
+  crossOutRange: (startIdx: number, endIdx: number) => void;
+  crossOutFillerWords: () => Promise<number>;
+  crossOutOuttakes: () => Promise<number>;
+  makeConcise: () => Promise<number>;
   uncrossAll: () => void;
   applyToTimeline: () => void;
   clear: () => void;
@@ -65,6 +146,7 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
   error: null,
   skipRegions: [],
   hasApplied: false,
+  isAnalyzing: false,
 
   transcribe: async () => {
     const { addToast } = useUIStore.getState();
@@ -148,66 +230,83 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
     }
   },
 
-  crossOutFillerWords: () => {
-    const { words } = get();
-    let count = 0;
-    const updated = words.map((w, i) => {
-      if (w.isCrossed) return w;
-
-      const lower = w.text.toLowerCase().replace(/[.,!?;:'"]/g, '');
-      if (FILLER_WORDS.has(lower)) {
-        count++;
-        return { ...w, isCrossed: true };
-      }
-
-      if (i < words.length - 1) {
-        const nextLower = words[i + 1].text.toLowerCase().replace(/[.,!?;:'"]/g, '');
-        for (const [first, second] of FILLER_PHRASES) {
-          if (lower === first && nextLower === second) {
-            count++;
-            return { ...w, isCrossed: true };
-          }
-        }
-      }
-
-      if (i > 0) {
-        const prevLower = words[i - 1].text.toLowerCase().replace(/[.,!?;:'"]/g, '');
-        for (const [first, second] of FILLER_PHRASES) {
-          if (prevLower === first && lower === second) {
-            const prevAlreadyCrossed = words[i - 1].isCrossed || FILLER_WORDS.has(prevLower);
-            if (!prevAlreadyCrossed) count++;
-            return { ...w, isCrossed: true };
-          }
-        }
-      }
-
-      return w;
-    });
-
-    const crossedPhraseFirstWords = new Set<number>();
-    for (let i = 0; i < updated.length - 1; i++) {
-      if (!updated[i].isCrossed) continue;
-      const lower = updated[i].text.toLowerCase().replace(/[.,!?;:'"]/g, '');
-      const nextLower = updated[i + 1].text.toLowerCase().replace(/[.,!?;:'"]/g, '');
-      for (const [first, second] of FILLER_PHRASES) {
-        if (lower === first && nextLower === second) {
-          crossedPhraseFirstWords.add(i);
-          if (!updated[i + 1].isCrossed) {
-            updated[i + 1] = { ...updated[i + 1], isCrossed: true };
-          }
-        }
-      }
-    }
-
-    set({ words: updated, skipRegions: computeSkipRegions(updated), hasApplied: false });
-
-    if (count > 0) {
-      useUIStore.getState().addToast(`Crossed out ${count} filler word${count !== 1 ? 's' : ''}`, 'success');
+  crossOutRange: (startIdx, endIdx) => {
+    const { words, hasApplied } = get();
+    const lo = Math.min(startIdx, endIdx);
+    const hi = Math.max(startIdx, endIdx);
+    const updated = words.map((w, i) =>
+      i >= lo && i <= hi ? { ...w, isCrossed: true } : w
+    );
+    if (hasApplied) {
+      set({ words: updated });
     } else {
-      useUIStore.getState().addToast('No filler words found', 'info');
+      set({ words: updated, skipRegions: computeSkipRegions(updated) });
     }
+    const count = hi - lo + 1;
+    useUIStore.getState().addToast(`Crossed out ${count} word${count !== 1 ? 's' : ''}`, 'success');
+  },
 
-    return count;
+  crossOutFillerWords: async () => {
+    const { words } = get();
+    const { addToast } = useUIStore.getState();
+    if (words.length === 0) { addToast('No transcript to analyze', 'warning'); return 0; }
+
+    set({ isAnalyzing: true });
+    try {
+      const ids = await analyzeTranscriptWithAI(words, 'fillers');
+      if (ids.size === 0) { addToast('No filler words found', 'info'); set({ isAnalyzing: false }); return 0; }
+
+      const updated = get().words.map((w) => ids.has(w.id) ? { ...w, isCrossed: true } : w);
+      set({ words: updated, skipRegions: computeSkipRegions(updated), hasApplied: false, isAnalyzing: false });
+      addToast(`Crossed out ${ids.size} filler word${ids.size !== 1 ? 's' : ''}`, 'success');
+      return ids.size;
+    } catch (err) {
+      set({ isAnalyzing: false });
+      addToast(`Filler analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      return 0;
+    }
+  },
+
+  crossOutOuttakes: async () => {
+    const { words } = get();
+    const { addToast } = useUIStore.getState();
+    if (words.length === 0) { addToast('No transcript to analyze', 'warning'); return 0; }
+
+    set({ isAnalyzing: true });
+    try {
+      const ids = await analyzeTranscriptWithAI(words, 'outtakes');
+      if (ids.size === 0) { addToast('No outtakes found', 'info'); set({ isAnalyzing: false }); return 0; }
+
+      const updated = get().words.map((w) => ids.has(w.id) ? { ...w, isCrossed: true } : w);
+      set({ words: updated, skipRegions: computeSkipRegions(updated), hasApplied: false, isAnalyzing: false });
+      addToast(`Crossed out ${ids.size} words from outtakes`, 'success');
+      return ids.size;
+    } catch (err) {
+      set({ isAnalyzing: false });
+      addToast(`Outtake analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      return 0;
+    }
+  },
+
+  makeConcise: async () => {
+    const { words } = get();
+    const { addToast } = useUIStore.getState();
+    if (words.length === 0) { addToast('No transcript to analyze', 'warning'); return 0; }
+
+    set({ isAnalyzing: true });
+    try {
+      const ids = await analyzeTranscriptWithAI(words, 'concise');
+      if (ids.size === 0) { addToast('Transcript is already concise', 'info'); set({ isAnalyzing: false }); return 0; }
+
+      const updated = get().words.map((w) => ids.has(w.id) ? { ...w, isCrossed: true } : w);
+      set({ words: updated, skipRegions: computeSkipRegions(updated), hasApplied: false, isAnalyzing: false });
+      addToast(`Crossed out ${ids.size} words to make it concise`, 'success');
+      return ids.size;
+    } catch (err) {
+      set({ isAnalyzing: false });
+      addToast(`Concise analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      return 0;
+    }
   },
 
   uncrossAll: () => {
@@ -250,22 +349,15 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
 
     const crossedCount = words.filter((w) => w.isCrossed).length;
 
-    const retimed: TranscriptWord[] = [];
-    let cursor = 0;
-
-    for (const word of words) {
-      if (word.isCrossed) {
-        retimed.push({ ...word });
-      } else {
-        const dur = word.endTime - word.startTime;
-        retimed.push({
-          ...word,
-          startTime: cursor,
-          endTime: cursor + dur,
-        });
-        cursor += dur;
-      }
-    }
+    const sorted = [...skipRegions].sort((a, b) => a.start - b.start);
+    const retimed: TranscriptWord[] = words.map((word) => {
+      if (word.isCrossed) return { ...word };
+      return {
+        ...word,
+        startTime: mapTimeToCompacted(word.startTime, sorted),
+        endTime: mapTimeToCompacted(word.endTime, sorted),
+      };
+    });
 
     set({ words: retimed, skipRegions: [], hasApplied: true });
 
@@ -283,6 +375,7 @@ export const useTranscriptStore = create<TranscriptState>((set, get) => ({
       error: null,
       skipRegions: [],
       hasApplied: false,
+      isAnalyzing: false,
     });
   },
 
